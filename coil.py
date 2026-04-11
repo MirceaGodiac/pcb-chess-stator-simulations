@@ -11,7 +11,7 @@ Citing:
 
 import math
 from dataclasses import dataclass, field
-
+import numpy as np
 @dataclass
 class PCBCoil:
     # Fixed constraints
@@ -19,12 +19,13 @@ class PCBCoil:
     r_in: float #inner coil radius
     trace_width: float # width of the copper trace
     trace_gap: float #min gap between adjacent traces
+    nr_layers: int = 1 # number of layers in the coil (default 1)
     chamfer_max: float              = 0.0 # chamfer setback at outermost turn (meters)
     chamfer_min: float              = 0.0 # chamfer setback at innermost turn (meters)
     copper_thickness: float         = 35e-6 # defaults to 1oz inner and outer
     layer_spacings: list[float]     = field(default_factory=lambda: [210e-6, 1065e-6, 210e-6])  # JLC 4L 1.6mm default
     current: float                  = 1.0 # current in Amperes
-    frequency: float                = 0.0 # frequency in Hertz
+    frequency: float                = 0.0 # frequency in Hertz                   
 
     # Derived
     n_turns: int   = field(init=False)
@@ -95,3 +96,33 @@ class PCBCoil:
             total += 8 * r_i - 4 * a_i * (2 - sqrt2)
         
         return total
+    
+    def _compute_coil_inductance(self) -> float:
+        """
+            Compute single layer coil inductance with current sheet approximation (Mohan et al. 1999)
+            L_single = ((niu0 * n^2 * d_avg) / 2 ) * [ c1 * ln(c2 / p) + c3 * p + c4 * p^2]
+                where:
+                    - niu0 = permeability of free space 4pi * 10e-7 H/m
+                    - n = number of turns in the coil
+                    - d_avg = average diameter of the coil in meters 
+                    - p = fill factor (dimensionless)
+                    - c1, c2, c3, c4 = geometry dependant fitting coefficients from Mohan's curve
+                                       for square spiral: [1.27, 2.07, 0.18, 0.13] 
+
+            Full coil inductance:
+            L_coil = n ^ 2 * L_single * 0.93
+                where:
+                    - n = number of layers
+                    - 0.93: Since the distance from l1-l6 is around 1.5mm worst case, 
+                            final self inductance is probably 5-10% lower than perfect value
+        """ 
+        
+        NIU_0 = 4 * math.pi * 10**(-7)
+
+        c1, c2, c3, c4 = 1.27, 2.07, 0.18, 0.13
+
+        l_single = ((NIU_0 * self.n_turns**2 * self.r_out * 2) / 2) * (c1 * np.log(c2/self.fill_factor) * (c3 * self.fill_factor) + c4 * self.fill_factor**2)
+
+        l_total = self.nr_layers ** 2 * l_single * 0.93
+
+        return (l_single, l_total)
