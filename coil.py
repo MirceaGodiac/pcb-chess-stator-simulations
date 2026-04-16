@@ -22,8 +22,8 @@ class PCBCoil:
     nr_layers: int = 1 # number of layers in the coil (default 1)
     chamfer_max: float              = 0.0 # chamfer setback at outermost turn (meters)
     chamfer_min: float              = 0.0 # chamfer setback at innermost turn (meters)
-    copper_thickness: float         = 35e-6 # defaults to 1oz inner and outer
-    layer_spacings: list[float]     = field(default_factory=lambda: [210e-6, 1065e-6, 210e-6])  # JLC 4L 1.6mm default
+    copper_thickness: float         = field(default_factory=lambda: [35e-6, 35e-6, 35e-6, 35e-6]) # JLC 4L 1.6mm default copper thickness per layer, 1oz inner+outer
+    layer_spacings: list[float]     = field(default_factory=lambda: [210e-6, 1065e-6, 210e-6])  # JLC 4L 1.6mm default stackup
     current: float                  = 1.0 # current in Amperes
     frequency: float                = 0.0 # frequency in Hertz                   
 
@@ -71,12 +71,15 @@ class PCBCoil:
     
     def _compute_trace_length(self) -> float:
         """
-            Total trace length for a single layer.
+            Total trace length.
             
             Iterates over each turn from outermost to innermost, computing
             the per-turn half-side-length r_i and the linearly interpolated
             chamfer setback a_i, then sums:
                 l(turn, i) = 8 * r_i - 4 * a_i * (2 - sqrt(2))
+
+            And then multiplies by the number of layers to get the total length.
+            Rocket science, baby.
         """
         pitch = self.trace_width + self.trace_gap
         sqrt2 = math.sqrt(2)
@@ -95,7 +98,7 @@ class PCBCoil:
             
             total += 8 * r_i - 4 * a_i * (2 - sqrt2)
         
-        return total
+        return total * self.nr_layers
     
     def _compute_coil_inductance(self) -> float:
         """
@@ -126,3 +129,24 @@ class PCBCoil:
         l_total = self.nr_layers ** 2 * l_single * 0.93
 
         return (l_single, l_total)
+    
+    def _compute_coil_dc_resistance(self) -> float:
+        """
+            Compute coil DC resistance.
+            R_dc = ((res_cu * length_trace) / w) * sum(k = 1 to Nlayers) (1 / layer_spacing_k)
+
+            where:
+                - res_cu: resistivity of copper (1.68e-8 ohm-meters)
+                - length_trace: total length of the coil trace in meters
+                - w: trace width in meters
+                - layer_spacing_k: spacing between layer k and k+1 in meters (for k = 1 to N-1, where N is the number of layers)
+        """
+        RESISTIVITY_COPPER = 1.68e-8 # ohm-meters
+
+        left_hs = (RESISTIVITY_COPPER * self.trace_length) / self.trace_width
+
+        right_hs = 0.0
+        for k in range(1, self.nr_layers):
+            right_hs += 1 / self.copper_thickness[k]
+
+        return left_hs * right_hs
